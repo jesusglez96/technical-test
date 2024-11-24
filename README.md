@@ -19,6 +19,10 @@
     - [Step 1: Configure Prisma](#step-1-configure-prisma)
     - [Step 2: Implement User Management](#step-2-implement-user-management)
     - [Step 3: Test](#step-3-test)
+  - [Task 4: Authentication and Authorization](#task-4-authentication-and-authorization)
+    - [Step 1: Services Implementation](#step-1-services-implementation)
+    - [Step 2: Api Implementation](#step-2-api-implementation)
+    - [Step 3: Try](#step-3-try)
 
 ## Task 1: Advanced Monorepo Setup
 
@@ -549,3 +553,350 @@ export default async function (app: FastifyInstance) {
 ### Step 3: Test
 
 Here, we only have to start our service and test it with **postman** or a similar application
+
+## Task 4: Authentication and Authorization
+
+### Step 1: Services Implementation
+
+Installations:
+
+```bash
+npm i @types/bcrypt bcrypt jsonwebtoken
+npm i -D @types/jsonwebtoken
+```
+
+**authService.ts**:
+
+```ts
+import jwt from 'jsonwebtoken';
+import bcrypt from 'bcrypt';
+
+export const hashPassword = async (password: string) => {
+  const saltRounds = 10;
+  return bcrypt.hash(password, saltRounds);
+};
+
+export const verifyPassword = async (password: string, hash: string) => {
+  return bcrypt.compare(password, hash);
+};
+
+export const generateToken = (userId: number, role: string) => {
+  return jwt.sign({ userId, role }, process.env.JWT_SECRET!, {
+    expiresIn: '1h',
+  });
+};
+
+export const verifyToken = (token: string) => {
+  return jwt.verify(token, process.env.JWT_SECRET!);
+};
+```
+
+**userService.ts**:
+
+```ts
+import { Prisma, PrismaClient, User } from '@prisma/client';
+import bcrypt from 'bcrypt';
+import { hashPassword, verifyPassword } from './authService';
+
+const prisma = new PrismaClient();
+
+const createUserValidator = Prisma.validator<Prisma.UserCreateInput>();
+const updateUserValidator = Prisma.validator<Prisma.UserUpdateInput>();
+
+export const createUser = async (
+  name: string,
+  email: string,
+  password: string,
+  role: string
+) => {
+  const hashedPassword = await hashPassword(password);
+  const data: Prisma.UserCreateInput = createUserValidator({
+    name,
+    email,
+    password: hashedPassword,
+    role,
+  });
+  return prisma.user.create({
+    data,
+  });
+};
+
+export const loginUser = async (
+  email: string,
+  password: string
+): Promise<User> => {
+  const user = await prisma.user.findUnique({ where: { email } });
+
+  if (!user) {
+    throw new Error('User not found');
+  }
+
+  const isPasswordValid = await verifyPassword(password, user.password);
+  if (!isPasswordValid) {
+    throw new Error('Invalid credentials');
+  }
+
+  return user;
+};
+
+export const getUserById = async (id: number) => {
+  return prisma.user.findUnique({
+    where: { id },
+    include: { posts: true },
+  });
+};
+
+export const updateUser = async (
+  id: number,
+  data: Partial<{ name: string; email: string }>
+) => {
+  const validatedData: Prisma.UserUpdateInput = updateUserValidator(data);
+  return prisma.user.update({
+    where: { id },
+    data,
+  });
+};
+
+export const deleteUser = async (id: number) => {
+  return prisma.user.delete({
+    where: { id },
+  });
+};
+
+export const getAllUsers = async () => {
+  return prisma.user.findMany({ include: { posts: true } });
+};
+```
+
+### Step 2: Api Implementation
+
+```bash
+npm i @fastify/cookie @fastify/jwt bcrypt
+```
+
+Routes configuration:
+
+**user.ts**:
+
+```ts
+import { FastifyInstance } from 'fastify';
+import {
+  createUser,
+  loginUser,
+  getUserById,
+  updateUser,
+  deleteUser,
+  getAllUsers,
+} from 'services';
+
+enum Roles {
+  admin = 'ADMIN',
+}
+
+export default async function (app: FastifyInstance) {
+  // Create User
+  app.post('/', async (request, reply) => {
+    const {
+      name,
+      email,
+      password,
+      role = 'user',
+    } = request.body as {
+      name: string;
+      email: string;
+      password: string;
+      role: Roles;
+    };
+    try {
+      const user = await createUser(name, email, password, role);
+      reply.code(201).send(user);
+    } catch (error) {
+      reply.code(400).send({ error: 'Failed to create user' });
+    }
+  });
+
+  // Get All Users
+  app.get('/', async (_, reply) => {
+    const users = await getAllUsers();
+    reply.send(users);
+  });
+
+  app.post('/login', async (request, reply) => {
+    // @ts-ignore
+    const { email, password } = request.body;
+
+    try {
+      const user = await loginUser(email, password);
+      const token = app.jwt.sign(user);
+
+      reply.send({ token });
+    } catch (error) {
+      reply.status(401).send({ error: 'Invalid email or password' });
+    }
+  });
+
+  // Get User by ID
+  app.get('/:id', async (request, reply) => {
+    // @ts-ignore
+    const id = parseInt(request.params.id, 10);
+    const user = await getUserById(id);
+    if (!user) {
+      return reply.code(404).send({ error: 'User not found' });
+    }
+    reply.send(user);
+  });
+
+  // Update User
+  app.put(
+    '/:id',
+    { preHandler: [app.authenticate] },
+    async (request, reply) => {
+      // @ts-ignore
+      const id = parseInt(request.params.id, 10);
+      const data = request.body as Partial<{ name: string; email: string }>;
+      try {
+        const user = await updateUser(id, data);
+        reply.send(user);
+      } catch (error) {
+        reply.code(400).send({ error: 'Failed to update user' });
+      }
+    }
+  );
+
+  // Delete User
+  app.delete('/:id', async (request, reply) => {
+    // @ts-ignore
+    const id = parseInt(request.params.id, 10);
+    try {
+      await deleteUser(id);
+      reply.code(204).send();
+    } catch (error) {
+      reply.code(400).send({ error: 'Failed to delete user' });
+    }
+  });
+}
+```
+
+**protected.ts**:
+
+```ts
+import { FastifyInstance } from 'fastify';
+declare module 'fastify' {
+  interface FastifyInstance {
+    authenticate: (
+      request: FastifyRequest,
+      reply: FastifyReply
+    ) => Promise<void>;
+    authorize: (
+      request: FastifyRequest,
+      reply: FastifyReply
+    ) => Promise<FastifyReply>;
+  }
+}
+export default async function (app: FastifyInstance) {
+  // Protected route for any authenticated user
+  app.get('/', { preHandler: app.authenticate }, async (request, reply) => {
+    reply.send({ message: `Welcome, user ${request.user}!` });
+  });
+
+  // Protected route for admin users only
+  app.get(
+    '/admin',
+    // @ts-ignore
+    { preHandler: [app.authenticate, app.authorize(['ADMIN'])] },
+    async (request, reply) => {
+      reply.send({ message: `Welcome, admin user ${request.user}!` });
+    }
+  );
+}
+```
+
+**index.ts**:
+
+```ts
+import { FastifyInstance } from 'fastify';
+import userRoutes from './user';
+import protectedRoutes from './protected';
+
+export default async function (app: FastifyInstance) {
+  app.get('/', async () => {
+    return { message: 'Welcome to the Fastify App' };
+  });
+
+  app.register(userRoutes, { prefix: '/users' });
+  app.register(protectedRoutes, { prefix: '/protected' });
+}
+```
+
+**api.ts** configuration:
+
+```ts
+import Fastify from 'fastify';
+import cors from '@fastify/cors';
+import sensible from '@fastify/sensible';
+import fastifyJwt from '@fastify/jwt';
+import fastifyCookie from '@fastify/cookie';
+import routes from './routes';
+import envPlugin from './plugins/env';
+
+const buildApp = async () => {
+  const app = Fastify({ logger: true });
+
+  // Register plugins
+  app.register(envPlugin);
+  app.register(cors);
+  app.register(sensible);
+
+  app.register(fastifyJwt, {
+    secret: 'supersecret', // Replace with a strong secret
+    sign: { expiresIn: '1h' },
+  });
+  app.register(fastifyCookie);
+
+  app.decorate('authenticate', async (request, reply) => {
+    try {
+      await request.jwtVerify(); // Verifies the token
+    } catch (err) {
+      reply.code(401).send({ error: 'Unauthorized' });
+    }
+  });
+
+  // Middleware to authorize based on user role
+  // @ts-ignore
+  app.decorate('authorize', (roles: string[]) => {
+    return async (
+      request: { user: any },
+      reply: {
+        code: (arg0: number) => {
+          (): any;
+          new (): any;
+          send: { (arg0: { error: string }): void; new (): any };
+        };
+      }
+    ) => {
+      const user = request.user;
+      if (!roles.includes(user.role)) {
+        reply.code(403).send({ error: 'Forbidden' });
+      }
+    };
+  });
+  // Register routes
+  app.register(routes);
+
+  try {
+    await app.listen({ port: 3000 });
+    console.log('Server is running at http://localhost:3000');
+  } catch (err) {
+    app.log.error(err);
+    process.exit(1);
+  }
+
+  return app;
+};
+
+buildApp();
+```
+
+### Step 3: Try
+
+Test with postman.

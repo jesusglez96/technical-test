@@ -1,5 +1,6 @@
 import { FastifyInstance } from 'fastify';
 import userRoutes from './user';
+import protectedRoutes from './protected';
 
 export default async function (app: FastifyInstance) {
   app.get('/', async () => {
@@ -7,4 +8,5 @@ export default async function (app: FastifyInstance) {
   });
 
   app.register(userRoutes, { prefix: '/users' });
+  app.register(protectedRoutes, { prefix: '/protected' });
 }
