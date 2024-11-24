@@ -16,6 +16,9 @@
     - [Step 3: Implement the Fastify App](#step-3-implement-the-fastify-app)
     - [Step 4: Run and Check](#step-4-run-and-check)
   - [Task 3: Advanced Database Integration with Prisma and PostgreSQL](#task-3-advanced-database-integration-with-prisma-and-postgresql)
+    - [Step 1: Configure Prisma](#step-1-configure-prisma)
+    - [Step 2: Implement User Management](#step-2-implement-user-management)
+    - [Step 3: Test](#step-3-test)
 
 ## Task 1: Advanced Monorepo Setup
 
@@ -45,7 +48,9 @@ cd technical-test
 
 ### Step 2: Installing Lerna
 
-`npx lerna init --packages="packages/*"`
+```bash
+npx lerna init --packages="packages/*"
+```
 
 This creates:
 
@@ -55,11 +60,15 @@ This creates:
 
 It will automatically add the following configuration to the **package.json**:
 
-`"workspaces": ["packages/*"]`
+```json
+"workspaces": ["packages/*"]
+```
 
 And the next one to the **lerna.json**:
 
-`"packages": ["packages/*"]`
+```json
+"packages": ["packages/*"]
+```
 
 Additionally, I am going to change the **package.json** _name_ to _technical-test_
 
@@ -67,7 +76,9 @@ Additionally, I am going to change the **package.json** _name_ to _technical-tes
 
 Each concern (e.g., API, services, utilities) is represented as a package. Create directories for each:
 
-`npx lerna create <packageName> --yes`
+```bash
+npx lerna create <packageName> --yes
+```
 
 This is going to create a directory for each package with a **package.json** created with default values and a simple **JavaScript** file and a **test**.
 
@@ -97,7 +108,9 @@ We are going to try to use the utilities package in the service's logic.
 
 Initially, make an install:
 
-`npm install`
+```bash
+npm install
+```
 
 Then, we should move to the corresponding package and install utilities
 
@@ -115,7 +128,9 @@ console.log(utilities());
 
 To conclude, we need to execute:
 
-`npm start`
+```bash
+npm start
+```
 
 And we should see the message printed
 
@@ -133,7 +148,9 @@ npm install -D typescript ts-node @types/node @fastify/autoload @fastify/cors @f
 
 Initialize **TypeScript**:
 
-`npx tsc --init`
+```bash
+npx tsc --init
+```
 
 Modify the **tsconfig.json**:
 
@@ -315,8 +332,220 @@ buildApp();
 
 Run:
 
-`npm run dev`
+```bash
+npm run dev
+```
 
 Go to `http://localhost:3000` to check if the app is up.
 
 ## Task 3: Advanced Database Integration with Prisma and PostgreSQL
+
+### Step 1: Configure Prisma
+
+Move to services:
+
+```bash
+cd packages/services
+```
+
+Install Prisma:
+
+```bash
+npm install typescript tsx @types/node --save-dev
+npx tsc --init
+npm install prisma @prisma/client
+```
+
+Initialize Prisma:
+
+```bash
+npx prisma init
+```
+
+Configure PostgreSQL database URL in the .env file:
+
+```environment
+DATABASE_URL="postgresql://postgres:admin@localhost:5432/technical-test?schema=public"
+```
+
+Define User and Post Models. In **prisma/schema.prisma**:
+
+```sql
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        Int      @unique @id @default(autoincrement())
+  name      String
+  email     String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  posts     Post[]
+}
+
+model Post {
+  id        Int      @unique @id @default(autoincrement())
+  title     String
+  content   String
+  authorId  Int
+  author    User     @relation(fields: [authorId], references: [id])
+}
+```
+
+We have included a relationship between User and Post using the Prisma constraint, every post depends on a user:
+
+```sql
+author    User     @relation(fields: [authorId], references: [id])
+```
+
+Also, with `@unique` we ensure that those fields are going to be uniques.
+
+Migrate the Database(We should have the database up):
+
+```bash
+npx prisma migrate dev --name init
+```
+
+Generate the Prisma Client:
+
+```bash
+npx prisma generate
+```
+
+### Step 2: Implement User Management
+
+Create the User Service in the package **services**, we are going to use Prisma.validation to make some simple validations:
+
+```ts
+import { Prisma, PrismaClient } from '@prisma/client';
+
+const prisma = new PrismaClient();
+
+const createUserValidator = Prisma.validator<Prisma.UserCreateInput>();
+const updateUserValidator = Prisma.validator<Prisma.UserUpdateInput>();
+
+export const createUser = async (name: string, email: string) => {
+  const data: Prisma.UserCreateInput = createUserValidator({
+    name,
+    email,
+  });
+  return prisma.user.create({
+    data: { name, email },
+  });
+};
+
+export const getUserById = async (id: number) => {
+  return prisma.user.findUnique({
+    where: { id },
+    include: { posts: true },
+  });
+};
+
+export const updateUser = async (
+  id: number,
+  data: Partial<{ name: string; email: string }>
+) => {
+  const validatedData: Prisma.UserUpdateInput = updateUserValidator(data);
+  return prisma.user.update({
+    where: { id },
+    data,
+  });
+};
+
+export const deleteUser = async (id: number) => {
+  return prisma.user.delete({
+    where: { id },
+  });
+};
+
+export const getAllUsers = async () => {
+  return prisma.user.findMany({ include: { posts: true } });
+};
+```
+
+In packages/services, `npm run build`.
+
+Install the services package in the api:
+
+```bash
+cd packages/api
+npm i services
+```
+
+Modify the **api/routes/user.ts**:
+
+```ts
+import { FastifyInstance } from 'fastify';
+import {
+  createUser,
+  getUserById,
+  updateUser,
+  deleteUser,
+  getAllUsers,
+} from 'services';
+
+export default async function (app: FastifyInstance) {
+  // Create User
+  app.post('/', async (request, reply) => {
+    const { name, email } = request.body as { name: string; email: string };
+    try {
+      const user = await createUser(name, email);
+      reply.code(201).send(user);
+    } catch (error) {
+      reply.code(400).send({ error: 'Failed to create user' });
+    }
+  });
+
+  // Get All Users
+  app.get('/', async (_, reply) => {
+    const users = await getAllUsers();
+    reply.send(users);
+  });
+
+  // Get User by ID
+  app.get('/:id', async (request, reply) => {
+    // @ts-ignore
+    const id = parseInt(request.params.id, 10);
+    const user = await getUserById(id);
+    if (!user) {
+      return reply.code(404).send({ error: 'User not found' });
+    }
+    reply.send(user);
+  });
+
+  // Update User
+  app.put('/:id', async (request, reply) => {
+    // @ts-ignore
+    const id = parseInt(request.params.id, 10);
+    const data = request.body as Partial<{ name: string; email: string }>;
+    try {
+      const user = await updateUser(id, data);
+      reply.send(user);
+    } catch (error) {
+      reply.code(400).send({ error: 'Failed to update user' });
+    }
+  });
+
+  // Delete User
+  app.delete('/:id', async (request, reply) => {
+    // @ts-ignore
+    const id = parseInt(request.params.id, 10);
+    try {
+      await deleteUser(id);
+      reply.code(204).send();
+    } catch (error) {
+      reply.code(400).send({ error: 'Failed to delete user' });
+    }
+  });
+}
+```
+
+### Step 3: Test
+
+Here, we only have to start our service and test it with **postman** or a similar application
