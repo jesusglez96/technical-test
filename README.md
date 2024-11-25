@@ -23,6 +23,9 @@
     - [Step 1: Services Implementation](#step-1-services-implementation)
     - [Step 2: Api Implementation](#step-2-api-implementation)
     - [Step 3: Try](#step-3-try)
+  - [Task 5: Advance API Features](#task-5-advance-api-features)
+    - [Services configurations](#services-configurations)
+    - [API configurations](#api-configurations)
 
 ## Task 1: Advanced Monorepo Setup
 
@@ -900,3 +903,110 @@ buildApp();
 ### Step 3: Try
 
 Test with postman.
+
+## Task 5: Advance API Features
+
+### Services configurations
+
+**fileService.ts**:
+
+```ts
+import fs from 'fs';
+import path from 'path';
+
+export const saveFile = async (file: Buffer, fileName: string) => {
+  const filePath = path.join(__dirname, '../../uploads', fileName);
+  fs.writeFileSync(filePath, file);
+  return filePath;
+};
+```
+
+**notificationService.ts**:
+
+```ts
+const clients: Set<WebSocket> = new Set();
+
+export const addClient = (client: WebSocket) => {
+  clients.add(client);
+};
+
+export const removeClient = (client: WebSocket) => {
+  clients.delete(client);
+};
+
+export const broadcast = (message: string) => {
+  for (const client of clients) {
+    client.send(message);
+  }
+};
+```
+
+### API configurations
+
+Installations:
+
+```bash
+npm i @fastify/multipart @fastify/websocket
+```
+
+Routes:
+
+- **upload.ts**:
+
+```ts
+import { FastifyInstance } from 'fastify';
+import path from 'path';
+import { saveFile } from 'services';
+
+const FILE_UPLOAD_DIR = path.join(__dirname, '../../uploads');
+
+export default async function (app: FastifyInstance) {
+  app.post(
+    '/upload',
+    { preHandler: [app.authenticate] },
+    async (req, reply) => {
+      const data = await req.file(); // Parse the uploaded file
+
+      if (!data) {
+        return reply.status(400).send({ message: 'No file uploaded' });
+      }
+
+      const filePath = path.join(FILE_UPLOAD_DIR, data.filename);
+
+      // Save the file locally (you can integrate cloud storage here)
+      await saveFile(await data.toBuffer(), data.filename);
+
+      return reply.send({
+        message: 'File uploaded successfully',
+        path: filePath,
+      });
+    }
+  );
+}
+```
+
+- **notification.ts**:
+
+```ts
+import { FastifyInstance } from 'fastify';
+import { addClient } from 'services';
+
+export default async function (app: FastifyInstance) {
+  app.get('/', { websocket: true }, (connection: any, req) => {
+    addClient(connection.socket);
+    // Example: Send a welcome message when a client connects
+    connection.socket.send('Welcome to the notification system!');
+
+    // Handle incoming messages
+    connection.socket.on('message', (message: any) => {
+      console.log('Received:', message.toString());
+      connection.socket.send(`Echo: ${message}`);
+    });
+
+    // Handle disconnection
+    connection.socket.on('close', () => {
+      console.log('Client disconnected');
+    });
+  });
+}
+```

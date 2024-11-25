@@ -23,6 +23,7 @@ export default async function (app: FastifyInstance) {
     // @ts-ignore
     { preHandler: [app.authenticate, app.authorize(['ADMIN'])] },
     async (request, reply) => {
+      // @ts-ignore
       reply.send({ message: `Welcome, admin user ${request.user}!` });
     }
   );

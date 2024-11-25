@@ -2,6 +2,8 @@ import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import sensible from '@fastify/sensible';
 import fastifyJwt from '@fastify/jwt';
+import fastifyMultipart from '@fastify/multipart';
+import fastifyWebsocket from '@fastify/websocket';
 import fastifyCookie from '@fastify/cookie';
 import routes from './routes';
 import envPlugin from './plugins/env';
@@ -47,6 +49,9 @@ const buildApp = async () => {
       }
     };
   });
+
+  app.register(fastifyMultipart);
+  app.register(fastifyWebsocket);
   // Register routes
   app.register(routes);
 

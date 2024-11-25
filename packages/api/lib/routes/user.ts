@@ -6,6 +6,7 @@ import {
   updateUser,
   deleteUser,
   getAllUsers,
+  broadcast,
 } from 'services';
 
 enum Roles {
@@ -28,6 +29,7 @@ export default async function (app: FastifyInstance) {
     };
     try {
       const user = await createUser(name, email, password, role);
+      broadcast(`New user created: ${user.name}`);
       reply.code(201).send(user);
     } catch (error) {
       reply.code(400).send({ error: 'Failed to create user' });
